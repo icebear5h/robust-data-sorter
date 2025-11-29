@@ -66,6 +66,8 @@ Client (JSON or TXT) → API Gateway → Ingest Lambda (Component A) → SQS (Me
 
 API Gateway exposes POST /ingest as a public HTTP endpoint. API Gateway invokes the Ingest Lambda. The Ingest Lambda validates and normalizes the incoming request, constructs a small message object containing tenant identity, a log identifier, the source type (json or text\_upload), and the log text in a uniform field, then sends this message to an SQS queue and returns HTTP 202 Accepted. The Worker Lambda is subscribed to the SQS queue and receives messages in batches. For each message, it simulates heavy processing by sleeping for 0.05 seconds times the number of characters in the text, then computes processed metadata and writes a record to DynamoDB. Only the worker writes to the NoSQL database; the ingestion path never touches storage directly.
 
+Architecture Diagram : ![ArchitectureDiagram](ArchitectureDiagram.png)
+(https://link.excalidraw.com/readonly/hHybmTEjVqqpek7k5tki)
 ---
 
 3. Component A – Unified ingestion endpoint (POST /ingest)

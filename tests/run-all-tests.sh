@@ -32,7 +32,7 @@ read -p "Press Enter to start..."
 # Test 1: Smoke Test
 echo ""
 echo -e "${GREEN}Running Test 1: Smoke Test${NC}"
-./tests/test1-warmup.sh
+./tests/test-single.sh
 echo ""
 echo -e "${YELLOW}Waiting 10 seconds before next test...${NC}"
 sleep 10

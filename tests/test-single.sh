@@ -26,17 +26,18 @@ fi
 # Send a single test request
 {
   echo "Sending single JSON request..."
-  START_TIME=$(date +%s%3N)
 
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_ENDPOINT/ingest" \
+  # Use curl's built-in timing which is cross-platform
+  RESPONSE=$(curl -s -o /dev/null -w "%{http_code}|%{time_total}" -X POST "$API_ENDPOINT/ingest" \
     -H "Content-Type: application/json" \
     -d '{"tenant_id":"test_tenant","log_id":"smoke_test_1","text":"Smoke test log with phone 555-123-4567"}')
 
-  END_TIME=$(date +%s%3N)
-  LATENCY=$((END_TIME - START_TIME))
+  HTTP_CODE=$(echo "$RESPONSE" | cut -d'|' -f1)
+  TIME_TOTAL=$(echo "$RESPONSE" | cut -d'|' -f2)
+  LATENCY_MS=$(echo "$TIME_TOTAL * 1000 / 1" | bc)
 
   echo "  HTTP Status: $HTTP_CODE"
-  echo "  Latency: ${LATENCY}ms"
+  echo "  Latency: ${LATENCY_MS}ms"
 
   if [ "$HTTP_CODE" = "202" ]; then
     echo "  ✓ Request accepted"
