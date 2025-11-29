@@ -1,0 +1,28 @@
+{
+  "name": "robust-data-sorter",
+  "version": "1.0.0",
+  "description": "Serverless log ingestion system with strict tenant isolation",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "package": "npm run build && cd dist && zip -r ../ingest-lambda.zip ingest/ && zip -r ../worker-lambda.zip worker/",
+    "deploy": "cd terraform && terraform apply",
+    "test": "jest"
+  },
+  "keywords": ["serverless", "aws", "lambda", "logs"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^20.11.5",
+    "@types/uuid": "^9.0.7",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.515.0",
+    "@aws-sdk/client-sqs": "^3.515.0",
+    "@aws-sdk/lib-dynamodb": "^3.515.0",
+    "uuid": "^9.0.1"
+  }
+}
