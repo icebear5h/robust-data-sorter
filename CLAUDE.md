@@ -64,19 +64,20 @@ The key property is that this endpoint is non-blocking. It does not perform heav
 
 The worker is implemented as a separate Lambda function that is triggered by messages in the SQS queue. AWS Lambda's SQS event source mapping delivers batches of messages to the function.
 
-**Worker concurrency is intentionally constrained:** The system is configured with `maximum_concurrency = 7` for the worker Lambda (terraform/main.tf). With an AWS account limit of 10 concurrent Lambda executions, this leaves ~3 executions for the ingest Lambda.
+**Concurrency constraints:** AWS account limit of 10 concurrent Lambda executions (unintentional). System configured with `maximum_concurrency = 7` for the worker Lambda (terraform/main.tf), leaving ~3 executions for the ingest Lambda (intentional allocation).
 
-**This creates intentional queue backlog under load:**
+**Unintentional queue backlog under load:**
 - Worker throughput: 7 workers ÷ 2.5s avg processing time = **2.8 messages/second**
 - Ingestion capacity: ~**16.7 messages/second** (1000 RPM)
 - **Queue backlog growth: ~14 messages/second during load tests**
 
-This is intentional and demonstrates real-world behavior under resource constraints. If the system runs continuously at 1000 RPM, the SQS queue will grow indefinitely. In production, you would either:
-1. Increase worker concurrency to match ingestion rate
-2. Accept queue backlog during traffic spikes, draining during low-traffic periods
-3. Scale worker concurrency dynamically based on queue depth
+The massive queue backlog is an unintentional consequence of the account limit. If the system runs continuously at 1000 RPM, the SQS queue will grow indefinitely. In production, you would either:
+1. Request AWS account limit increase
+2. Increase worker concurrency to match ingestion rate
+3. Accept queue backlog during traffic spikes, draining during low-traffic periods
+4. Scale worker concurrency dynamically based on queue depth
 
-For testing, this constraint validates that the system handles queue backlog gracefully and that idempotent writes prevent data corruption during retries.
+For testing, this constraint does validate that the system handles queue backlog gracefully and that idempotent writes prevent data corruption during retries.
 
 For each SQS message, the handler parses the JSON body back into the internal message structure, recovering tenantId, logId, source, and text. The text field is the normalized flat text produced by the ingestion step.
 
