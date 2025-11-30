@@ -42,58 +42,21 @@ cd terraform
 terraform apply -var='crash_simulation_enabled=true'
 ```
 
-## Test Suite
+## Testing
 
-The system includes 7 comprehensive tests:
+The system includes 7 comprehensive tests covering smoke tests, load tests, idempotency, and crash/DLQ behavior.
 
-1. **Smoke Test** - Single request to verify basic functionality
-2. **Normal Load** (1000 RPM) - Standard load test
-3. **Normal Repeat** (1000 RPM) - Consistency verification
-4. **Spike Test** (3000 RPM) - High load test
-5. **Sustained Load** (500 RPM, 2 min) - Extended duration test
-6. **Idempotency** - Verifies duplicate requests only create one record (tests both JSON and text/plain inputs)
-7. **Crash & DLQ** - Tests worker crash simulation and dead-letter queue behavior (requires `crash_simulation_enabled=true`)
-
-### Running Tests
-
-**IMPORTANT: Run tests individually, not in sequence.** Load tests create large queue backlogs that interfere with subsequent tests.
-
-**Recommended test order:**
+**Quick test:**
 ```bash
-# Start with clean, isolated tests first
-./tests/test1-single.sh          # Smoke test (quick validation)
-./tests/test6-idempotency.sh     # Idempotency test (run BEFORE load tests)
-./tests/test-crash-dlq.sh        # Crash & DLQ test (~5 min)
-
-# Then run load tests (creates queue backlog)
-./tests/test2-normal.sh          # Normal load (1000 RPM)
-./tests/test3-normal-repeat.sh   # Normal repeat
-./tests/test4-spike.sh           # Spike test (3000 RPM)
-./tests/test5-sustained.sh       # Sustained load (2 min)
+./tests/test1-single.sh          # Smoke test
+./tests/test6-idempotency.sh     # Idempotency (JSON + text/plain)
 ```
 
-**Why this order matters:**
-
-The system is constrained by AWS account concurrency limits (10 total Lambda executions). With 7 workers allocated, processing throughput (~2.8 msg/sec) is much slower than load test input rate (~16.7 msg/sec at 1000 RPM). This intentionally creates queue backlog to demonstrate real-world behavior under constrained resources.
-
-**Impact on tests:**
-- Load tests (test2-5) build up ~840 message backlogs during 1-minute runs
-- Queue takes several minutes to drain after test completes
-- Idempotency test requires empty queue to verify exact record counts
-- Running idempotency after load tests gives false results due to queue backlog
-
-**Math:** 1000 RPM ÷ 60s = 16.7 msg/s incoming. 7 workers ÷ 2.5s processing time = 2.8 msg/s throughput. Backlog grows at ~14 msg/s during load tests.
-
-**Between load tests:** Wait 30-60 seconds for queue to drain, or monitor with:
-```bash
-./tests/monitor-metrics.sh
-```
-
-**For a clean slate between test runs:**
-```bash
-./tests/clear-dynamodb.sh        # Clear all stored logs
-# Wait for SQS queue to fully drain (check with monitor-metrics.sh)
-```
+See [tests/README.md](tests/README.md) for detailed testing documentation, including:
+- Test descriptions and expected results
+- Recommended test order (IMPORTANT: run tests individually, not sequentially)
+- Queue backlog behavior and why test order matters
+- Configuration and monitoring
 
 ---
 
