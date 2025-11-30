@@ -8,38 +8,91 @@ Serverless log ingestion system with strict tenant isolation.
 # Install dependencies
 npm install
 
-# Build and deploy to AWS
+# Build and deploy to AWS (crash simulation enabled by default)
 ./deploy.sh
 
-# Run comprehensive test suite
-./tests/run-all-tests.sh
+# Run individual tests (see Test Suite section for recommended order)
+./tests/test1-single.sh          # Start with smoke test
+./tests/test6-idempotency.sh     # Then idempotency (before load tests)
 ```
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions.
+## Crash Simulation Configuration
+
+**IMPORTANT:** Crash simulation is **ENABLED BY DEFAULT** (configured in `terraform/variables.tf`).
+
+This is required for Test 7 (Crash & DLQ) to pass. The deployment script `./deploy.sh` automatically applies this setting.
+
+**To verify crash simulation is enabled:**
+```bash
+aws lambda get-function-configuration \
+  --function-name log-worker-lambda \
+  --region us-east-1 \
+  --query 'Environment.Variables.CRASH_SIMULATION'
+```
+
+**To disable for production deployments:**
+```bash
+cd terraform
+terraform apply -var='crash_simulation_enabled=false'
+```
+
+**To re-enable:**
+```bash
+cd terraform
+terraform apply -var='crash_simulation_enabled=true'
+```
 
 ## Test Suite
 
-The system includes 8 comprehensive tests:
+The system includes 7 comprehensive tests:
 
 1. **Smoke Test** - Single request to verify basic functionality
 2. **Normal Load** (1000 RPM) - Standard load test
 3. **Normal Repeat** (1000 RPM) - Consistency verification
 4. **Spike Test** (3000 RPM) - High load test
 5. **Sustained Load** (500 RPM, 2 min) - Extended duration test
-6. **Idempotency** - Verifies duplicate requests only create one record
-7. **Find Limit** - Progressive load (1K-8K RPM) to find breaking point
-8. **Completeness** - Sends 1000 unique requests, verifies all are stored
+6. **Idempotency** - Verifies duplicate requests only create one record (tests both JSON and text/plain inputs)
+7. **Crash & DLQ** - Tests worker crash simulation and dead-letter queue behavior (requires `crash_simulation_enabled=true`)
 
-**Tested Performance (10 concurrent executions):**
-- Sustained throughput: 8000+ RPM at 100% success rate
-- Latency at 8K RPM: P50=48ms, P95=72ms, P99=120ms
-- Worker concurrency capping enables high performance on limited AWS accounts
+### Running Tests
 
-Run individual tests:
+**IMPORTANT: Run tests individually, not in sequence.** Load tests create large queue backlogs that interfere with subsequent tests.
+
+**Recommended test order:**
 ```bash
-./tests/test6-idempotency.sh      # Test idempotent writes
-./tests/test7-find-limit.sh       # Find throughput limit
-./tests/test8-completeness.sh     # Verify no message loss
+# Start with clean, isolated tests first
+./tests/test1-single.sh          # Smoke test (quick validation)
+./tests/test6-idempotency.sh     # Idempotency test (run BEFORE load tests)
+./tests/test-crash-dlq.sh        # Crash & DLQ test (~5 min)
+
+# Then run load tests (creates queue backlog)
+./tests/test2-normal.sh          # Normal load (1000 RPM)
+./tests/test3-normal-repeat.sh   # Normal repeat
+./tests/test4-spike.sh           # Spike test (3000 RPM)
+./tests/test5-sustained.sh       # Sustained load (2 min)
+```
+
+**Why this order matters:**
+
+The system is constrained by AWS account concurrency limits (10 total Lambda executions). With 7 workers allocated, processing throughput (~2.8 msg/sec) is much slower than load test input rate (~16.7 msg/sec at 1000 RPM). This intentionally creates queue backlog to demonstrate real-world behavior under constrained resources.
+
+**Impact on tests:**
+- Load tests (test2-5) build up ~840 message backlogs during 1-minute runs
+- Queue takes several minutes to drain after test completes
+- Idempotency test requires empty queue to verify exact record counts
+- Running idempotency after load tests gives false results due to queue backlog
+
+**Math:** 1000 RPM ÷ 60s = 16.7 msg/s incoming. 7 workers ÷ 2.5s processing time = 2.8 msg/s throughput. Backlog grows at ~14 msg/s during load tests.
+
+**Between load tests:** Wait 30-60 seconds for queue to drain, or monitor with:
+```bash
+./tests/monitor-metrics.sh
+```
+
+**For a clean slate between test runs:**
+```bash
+./tests/clear-dynamodb.sh        # Clear all stored logs
+# Wait for SQS queue to fully drain (check with monitor-metrics.sh)
 ```
 
 ---

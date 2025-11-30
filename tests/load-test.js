@@ -191,14 +191,14 @@ async function runLoadTest() {
 
   console.log('Starting load test...');
   console.log(`Endpoint:          ${CONFIG.endpoint}`);
-  console.log(`Target RPM:        ${CONFIG.requestsPerMinute}`);
   console.log(`Duration:          ${CONFIG.durationMinutes} minute(s)`);
+  console.log(`Test Concurrency:  ${process.env.TEST_CONCURRENCY || 2}`);
+  console.log(`Mode:              Max throughput (fire as fast as possible)`);
   console.log(`Tenants:           ${CONFIG.tenants.join(', ')}`);
   console.log('');
 
-  const totalRequests = CONFIG.requestsPerMinute * CONFIG.durationMinutes; // 1000
-  const intervalMs = (60 * 1000 * CONFIG.durationMinutes) / totalRequests; // 60ms
-  const concurrency = 5; // Allow up to 15 in-flight to handle variance in response times
+  const concurrency = parseInt(process.env.TEST_CONCURRENCY) || 2;
+  const durationMs = CONFIG.durationMinutes * 60 * 1000;
 
   // Reset stats after warmup
   stats.total = 0;
@@ -209,44 +209,72 @@ async function runLoadTest() {
 
   let requestsLaunched = 0;
   let activeRequests = 0;
+  let testEnded = false;
 
-  const launchInterval = setInterval(() => {
-    if (requestsLaunched >= totalRequests) {
-      clearInterval(launchInterval);
-      return;
-    }
+  const startTime = Date.now();
 
-    // Only launch if we have capacity (avoid overwhelming Lambda)
-    if (activeRequests < concurrency) {
-      requestsLaunched++;
-      activeRequests++;
+  // Function to launch a request when slot is available
+  const launchRequest = () => {
+    if (testEnded) return;
 
-      makeRequest()
-        .then((result) => {
-          activeRequests--;
-          if (result.success) {
-            process.stdout.write('.');
-          } else {
-            process.stdout.write('X');
-          }
-        })
-        .catch(() => {
-          activeRequests--;
+    requestsLaunched++;
+    activeRequests++;
+
+    makeRequest()
+      .then((result) => {
+        activeRequests--;
+        if (result.success) {
+          process.stdout.write('.');
+        } else {
           process.stdout.write('X');
-        });
-    }
-  }, intervalMs);
+        }
+        // Immediately launch another if we have capacity and time remaining
+        if (!testEnded && activeRequests < concurrency) {
+          setImmediate(launchRequest);
+        }
+      })
+      .catch(() => {
+        activeRequests--;
+        process.stdout.write('X');
+        // Immediately launch another if we have capacity and time remaining
+        if (!testEnded && activeRequests < concurrency) {
+          setImmediate(launchRequest);
+        }
+      });
+  };
 
-  // Wait for all requests to complete
+  // Start initial batch up to concurrency limit
+  for (let i = 0; i < concurrency; i++) {
+    launchRequest();
+  }
+
+  // End test after duration
   await new Promise((resolve) => {
-    const checkComplete = setInterval(() => {
-      if (requestsLaunched >= totalRequests && activeRequests === 0) {
-        clearInterval(checkComplete);
-        clearInterval(launchInterval);
-        resolve();
-      }
-    }, 100);
+    setTimeout(() => {
+      testEnded = true;
+      console.log('\n\nTest duration reached. Waiting for in-flight requests to complete...');
+      
+      // Wait for all active requests to finish
+      const checkComplete = setInterval(() => {
+        if (activeRequests === 0) {
+          clearInterval(checkComplete);
+          resolve();
+        }
+      }, 100);
+    }, durationMs);
   });
+
+  const actualDuration = (Date.now() - startTime) / 1000;
+  const throughputPerSecond = stats.total / actualDuration;
+  const throughputPerMinute = throughputPerSecond * 60;
+
+  console.log('');
+  console.log('============================================================');
+  console.log('MAX THROUGHPUT TEST RESULTS');
+  console.log('============================================================');
+  console.log(`Actual Duration:   ${actualDuration.toFixed(2)}s`);
+  console.log(`Throughput:        ${throughputPerSecond.toFixed(2)} req/s (${throughputPerMinute.toFixed(0)} req/min)`);
+  console.log('');
 
   printStats();
 }

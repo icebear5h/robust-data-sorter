@@ -21,3 +21,9 @@ variable "worker_lambda_zip" {
   type        = string
   default     = "../worker-lambda.zip"
 }
+
+variable "crash_simulation_enabled" {
+  description = "Enable crash simulation for testing DLQ behavior"
+  type        = string
+  default     = "true"
+}

@@ -16,14 +16,14 @@ fi
 
 {
   echo "=========================================="
-  echo "TEST 2: NORMAL LOAD (1000 RPM, 1 minute)"
+  echo "TEST 2: MAX THROUGHPUT (concurrency=2, 1 minute)"
   echo "=========================================="
   echo "Timestamp: $(date)"
   echo ""
 } | tee "$RESULTS_FILE"
 
-# Run load test
-API_ENDPOINT="$API_ENDPOINT" RPM=1000 DURATION=1 node tests/load-test.js | tee -a "$RESULTS_FILE"
+# Run load test - max throughput mode with test concurrency=1
+API_ENDPOINT="$API_ENDPOINT" TEST_CONCURRENCY=3 DURATION=1 node tests/load-test.js | tee -a "$RESULTS_FILE"
 
 # Wait for processing to complete
 {
@@ -39,6 +39,7 @@ sleep 20
 
   QUEUE_ATTRS=$(aws sqs get-queue-attributes \
     --queue-url "$SQS_QUEUE_URL" \
+    --region us-east-1 \
     --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible ApproximateAgeOfOldestMessage \
     --output json 2>/dev/null)
 
@@ -51,7 +52,7 @@ sleep 20
   echo "  In-flight: $IN_FLIGHT"
   echo "  Oldest message: ${OLDEST}s"
 
-  ITEM_COUNT=$(aws dynamodb describe-table --table-name tenant_processed_logs --output json 2>/dev/null | jq -r '.Table.ItemCount // 0')
+  ITEM_COUNT=$(aws dynamodb describe-table --table-name tenant_processed_logs --region us-east-1 --output json 2>/dev/null | jq -r '.Table.ItemCount // 0')
   echo ""
   echo "DynamoDB:"
   echo "  Total items: $ITEM_COUNT"

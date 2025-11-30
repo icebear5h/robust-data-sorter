@@ -44,6 +44,7 @@ sleep 30
 
   QUEUE_ATTRS=$(aws sqs get-queue-attributes \
     --queue-url "$SQS_QUEUE_URL" \
+    --region us-east-1 \
     --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible ApproximateAgeOfOldestMessage \
     --output json 2>/dev/null)
 
@@ -56,7 +57,7 @@ sleep 30
   echo "  In-flight: $IN_FLIGHT"
   echo "  Oldest message: ${OLDEST}s"
 
-  ITEM_COUNT=$(aws dynamodb describe-table --table-name tenant_processed_logs --output json 2>/dev/null | jq -r '.Table.ItemCount // 0')
+  ITEM_COUNT=$(aws dynamodb describe-table --table-name tenant_processed_logs --region us-east-1 --output json 2>/dev/null | jq -r '.Table.ItemCount // 0')
   echo ""
   echo "DynamoDB:"
   echo "  Total items: $ITEM_COUNT"
@@ -83,7 +84,7 @@ sleep 30
   echo "========================================"
   echo ""
   echo "NOTE: Queue may still have messages after spike."
-  echo "Check queue drain: aws sqs get-queue-attributes --queue-url $SQS_QUEUE_URL --attribute-names ApproximateNumberOfMessages"
+  echo "Check queue drain: aws sqs get-queue-attributes --queue-url $SQS_QUEUE_URL --region us-east-1 --attribute-names ApproximateNumberOfMessages"
   echo ""
   echo "Results saved to: $RESULTS_FILE"
 } | tee -a "$RESULTS_FILE"

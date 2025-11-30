@@ -22,41 +22,67 @@ TEST_TEXT="This is a test log entry for idempotency testing with phone 555-999-8
 # Start writing to results file
 {
   echo "=========================================="
-  echo "TEST 6: IDEMPOTENCY"
+  echo "TEST 6: IDEMPOTENCY (MIXED CONTENT TYPES)"
   echo "=========================================="
   echo "Timestamp: $(date)"
   echo ""
-  echo "Testing idempotent write behavior by sending duplicate requests"
+  echo "Testing idempotent write behavior with both JSON and text/plain inputs"
   echo "Tenant: $TEST_TENANT"
-  echo "Log ID: $TEST_LOG_ID"
+  echo "JSON Log ID: $TEST_LOG_ID (will be reused 5 times)"
+  echo "Text Log IDs: Server-generated UUIDs (5 unique)"
+  echo ""
+  echo "Expected behavior:"
+  echo "  - 5 duplicate JSON requests -> 1 DynamoDB record (idempotent)"
+  echo "  - 5 unique text requests -> 5 DynamoDB records (unique log_ids)"
+  echo "  - Total: 6 records for this tenant"
   echo ""
 } | tee "$RESULTS_FILE"
 
 # Clean up any existing test data first
 {
-  echo "Cleaning up any existing test data..."
+  echo "Cleaning up any existing test data for this tenant..."
   TENANT_PK="TENANT#${TEST_TENANT}"
-  LOG_SK="LOG#${TEST_LOG_ID}"
 
-  aws dynamodb delete-item \
+  # Query all items for this tenant
+  EXISTING_ITEMS=$(aws dynamodb query \
     --table-name tenant_processed_logs \
-    --key "{\"tenant_pk\":{\"S\":\"$TENANT_PK\"},\"log_sk\":{\"S\":\"$LOG_SK\"}}" \
-    2>/dev/null || true
+    --region us-east-1 \
+    --key-condition-expression "tenant_pk = :pk" \
+    --expression-attribute-values "{\":pk\":{\"S\":\"$TENANT_PK\"}}" \
+    --output json 2>/dev/null || echo '{"Items":[]}')
+
+  EXISTING_COUNT=$(echo "$EXISTING_ITEMS" | jq '.Items | length')
+
+  if [ "$EXISTING_COUNT" -gt 0 ]; then
+    echo "  Found $EXISTING_COUNT existing records for tenant, deleting..."
+
+    # Delete each item
+    echo "$EXISTING_ITEMS" | jq -r '.Items[] | .log_sk.S' | while read -r log_sk; do
+      aws dynamodb delete-item \
+        --table-name tenant_processed_logs \
+        --region us-east-1 \
+        --key "{\"tenant_pk\":{\"S\":\"$TENANT_PK\"},\"log_sk\":{\"S\":\"$log_sk\"}}" \
+        2>/dev/null || true
+    done
+    echo "  Cleanup complete"
+  else
+    echo "  No existing records found"
+  fi
 
   echo "Ready to start test"
   echo ""
 } | tee -a "$RESULTS_FILE"
 
-# Send the same request 10 times
+# Send duplicate requests with mixed content types
 {
-  echo "========== SENDING DUPLICATE REQUESTS =========="
-  echo "Sending 10 identical requests..."
+  echo "========== SENDING DUPLICATE REQUESTS (MIXED CONTENT TYPES) =========="
+  echo "Testing idempotency with both JSON and text/plain inputs"
   echo ""
+  echo "Part 1: Sending 5 JSON requests with same tenant_id and log_id..."
 
-  SUCCESS_COUNT=0
-
-  for i in {1..10}; do
-    echo -n "Request $i: "
+  JSON_SUCCESS=0
+  for i in {1..5}; do
+    echo -n "  JSON Request $i: "
 
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_ENDPOINT/ingest" \
       -H "Content-Type: application/json" \
@@ -64,14 +90,36 @@ TEST_TEXT="This is a test log entry for idempotency testing with phone 555-999-8
 
     if [ "$HTTP_CODE" = "202" ]; then
       echo "✓ Accepted (HTTP $HTTP_CODE)"
-      SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+      JSON_SUCCESS=$((JSON_SUCCESS + 1))
     else
       echo "✗ Failed (HTTP $HTTP_CODE)"
     fi
   done
 
   echo ""
-  echo "Successful submissions: $SUCCESS_COUNT/10"
+  echo "Part 2: Sending 5 text/plain requests with same tenant (each gets unique log_id)..."
+
+  TEXT_SUCCESS=0
+  for i in {1..5}; do
+    echo -n "  Text Request $i: "
+
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_ENDPOINT/ingest" \
+      -H "Content-Type: text/plain" \
+      -H "X-Tenant-ID: $TEST_TENANT" \
+      -d "Text upload #$i: $TEST_TEXT")
+
+    if [ "$HTTP_CODE" = "202" ]; then
+      echo "✓ Accepted (HTTP $HTTP_CODE)"
+      TEXT_SUCCESS=$((TEXT_SUCCESS + 1))
+    else
+      echo "✗ Failed (HTTP $HTTP_CODE)"
+    fi
+  done
+
+  echo ""
+  echo "Successful JSON submissions: $JSON_SUCCESS/5 (should create 1 record)"
+  echo "Successful text submissions: $TEXT_SUCCESS/5 (should create 5 records)"
+  echo "Expected total records for tenant: 6"
   echo ""
 } | tee -a "$RESULTS_FILE"
 
@@ -92,6 +140,7 @@ sleep 20
   # Query for the specific item
   ITEM=$(aws dynamodb get-item \
     --table-name tenant_processed_logs \
+    --region us-east-1 \
     --key "{\"tenant_pk\":{\"S\":\"$TENANT_PK\"},\"log_sk\":{\"S\":\"$LOG_SK\"}}" \
     --output json 2>/dev/null)
 
@@ -129,6 +178,7 @@ sleep 20
   # Query all items for this tenant to ensure no duplicates
   ALL_ITEMS=$(aws dynamodb query \
     --table-name tenant_processed_logs \
+    --region us-east-1 \
     --key-condition-expression "tenant_pk = :pk" \
     --expression-attribute-values "{\":pk\":{\"S\":\"$TENANT_PK\"}}" \
     --output json 2>/dev/null)
@@ -138,10 +188,14 @@ sleep 20
   echo ""
   echo "Total items for tenant '$TEST_TENANT': $ITEM_COUNT"
 
-  if [ "$ITEM_COUNT" = "1" ]; then
-    echo "✓ IDEMPOTENCY TEST PASSED: Only 1 record exists despite 10 duplicate requests"
+  if [ "$ITEM_COUNT" = "6" ]; then
+    echo "✓ IDEMPOTENCY TEST PASSED: Found 6 records as expected"
+    echo "  - 1 record from 5 duplicate JSON requests (idempotent)"
+    echo "  - 5 records from 5 unique text/plain requests (unique log_ids)"
   else
-    echo "✗ IDEMPOTENCY TEST FAILED: Expected 1 record, found $ITEM_COUNT"
+    echo "✗ IDEMPOTENCY TEST FAILED: Expected 6 records, found $ITEM_COUNT"
+    echo "  - Expected: 1 JSON record + 5 text/plain records = 6 total"
+    echo "  - Found: $ITEM_COUNT"
   fi
 
   echo ""
@@ -150,6 +204,7 @@ sleep 20
   # SQS Queue status
   QUEUE_ATTRS=$(aws sqs get-queue-attributes \
     --queue-url "$SQS_QUEUE_URL" \
+    --region us-east-1 \
     --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
     --output json 2>/dev/null)
 
@@ -161,7 +216,7 @@ sleep 20
   echo "  In-flight: $IN_FLIGHT"
 
   # Total DynamoDB count
-  TOTAL_ITEMS=$(aws dynamodb describe-table --table-name tenant_processed_logs --output json 2>/dev/null | jq -r '.Table.ItemCount // 0')
+  TOTAL_ITEMS=$(aws dynamodb describe-table --table-name tenant_processed_logs --region us-east-1 --output json 2>/dev/null | jq -r '.Table.ItemCount // 0')
   echo ""
   echo "DynamoDB:"
   echo "  Total items (all tenants): $TOTAL_ITEMS"

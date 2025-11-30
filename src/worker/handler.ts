@@ -30,6 +30,12 @@ function processText(text: string): string {
 async function processMessage(record: SQSRecord): Promise<void> {
   const message: InternalMessage = JSON.parse(record.body);
 
+  // Crash simulation for testing DLQ behavior
+  if (process.env.CRASH_SIMULATION === 'true' && message.logId === 'crash-test') {
+    console.error(`CRASH SIMULATION: Throwing error for log_id=${message.logId}`);
+    throw new Error('Simulated worker crash for testing');
+  }
+
   // Simulate heavy CPU-bound processing
   await simulateHeavyProcessing(message.text);
 

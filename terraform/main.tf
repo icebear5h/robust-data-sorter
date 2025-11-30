@@ -38,7 +38,7 @@ resource "aws_dynamodb_table" "tenant_processed_logs" {
 # SQS Queue for log ingestion
 resource "aws_sqs_queue" "log_ingest_queue" {
   name                       = "log-ingest-queue"
-  visibility_timeout_seconds = 300  # 5 minutes, should be >= Lambda timeout
+  visibility_timeout_seconds = 60  # 1 minute, should be >= Lambda timeout
   message_retention_seconds  = 345600  # 4 days
   receive_wait_time_seconds  = 0
 
@@ -195,11 +195,12 @@ resource "aws_lambda_function" "worker_lambda" {
   handler         = "worker/handler.handler"
   source_code_hash = filebase64sha256(var.worker_lambda_zip)
   runtime         = "nodejs20.x"
-  timeout         = 300   # 5 minutes to handle long texts
+  timeout         = 30   # 30 seconds (sufficient for most processing)
 
   environment {
     variables = {
-      TABLE_NAME = aws_dynamodb_table.tenant_processed_logs.name
+      TABLE_NAME        = aws_dynamodb_table.tenant_processed_logs.name
+      CRASH_SIMULATION  = var.crash_simulation_enabled
     }
   }
 
@@ -217,7 +218,7 @@ resource "aws_lambda_event_source_mapping" "sqs_to_worker" {
   enabled          = true
 
   scaling_config {
-    maximum_concurrency = 2  # Limit worker to 2 concurrent executions, leaving 8 for ingest
+    maximum_concurrency = 7  # 7 workers, 3 ingest - prioritizes queue drain speed
   }
 }
 

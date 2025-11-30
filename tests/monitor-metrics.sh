@@ -28,6 +28,7 @@ while true; do
   echo "SQS Queue:"
   QUEUE_ATTRS=$(aws sqs get-queue-attributes \
     --queue-url "$SQS_QUEUE_URL" \
+    --region us-east-1 \
     --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible ApproximateAgeOfOldestMessage \
     --output json 2>/dev/null || echo "{}")
 
@@ -42,7 +43,7 @@ while true; do
 
   # DynamoDB table stats
   echo "DynamoDB (tenant_processed_logs):"
-  TABLE_INFO=$(aws dynamodb describe-table --table-name tenant_processed_logs --output json 2>/dev/null || echo "{}")
+  TABLE_INFO=$(aws dynamodb describe-table --table-name tenant_processed_logs --region us-east-1 --output json 2>/dev/null || echo "{}")
   ITEM_COUNT=$(echo "$TABLE_INFO" | jq -r '.Table.ItemCount // "N/A"')
   TABLE_SIZE=$(echo "$TABLE_INFO" | jq -r '.Table.TableSizeBytes // 0')
   TABLE_SIZE_MB=$(echo "scale=2; $TABLE_SIZE / 1024 / 1024" | bc 2>/dev/null || echo "0")

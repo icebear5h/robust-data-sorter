@@ -14,7 +14,7 @@ echo "This will delete ALL items from the $TABLE_NAME table"
 echo ""
 
 # Get current item count
-ITEM_COUNT=$(aws dynamodb describe-table --table-name "$TABLE_NAME" --output json 2>/dev/null | jq -r '.Table.ItemCount // 0')
+ITEM_COUNT=$(aws dynamodb describe-table --table-name "$TABLE_NAME" --region us-east-1 --output json 2>/dev/null | jq -r '.Table.ItemCount // 0')
 
 # Handle empty/null values
 if [ -z "$ITEM_COUNT" ] || [ "$ITEM_COUNT" = "null" ]; then
@@ -43,6 +43,7 @@ echo "Scanning table for all items..."
 # Scan to get all partition and sort keys
 ALL_KEYS=$(aws dynamodb scan \
   --table-name "$TABLE_NAME" \
+  --region us-east-1 \
   --attributes-to-get tenant_pk log_sk \
   --output json 2>/dev/null)
 
@@ -66,6 +67,7 @@ echo "$ALL_KEYS" | jq -c '.Items[]' | while read -r item; do
 
   aws dynamodb delete-item \
     --table-name "$TABLE_NAME" \
+    --region us-east-1 \
     --key "{\"tenant_pk\":{\"S\":\"$TENANT_PK\"},\"log_sk\":{\"S\":\"$LOG_SK\"}}" \
     2>/dev/null
 

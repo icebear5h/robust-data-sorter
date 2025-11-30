@@ -88,7 +88,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     // Return 202 Accepted immediately
     return {
       statusCode: 202,
-      body: JSON.stringify({ status: 'accepted' })
+      body: JSON.stringify({ status: 'accepted', logId: internalMessage.logId, tenantId: internalMessage.tenantId })
     };
   } catch (error) {
     console.error('Error processing request:', error);

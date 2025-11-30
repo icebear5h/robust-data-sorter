@@ -30,7 +30,7 @@ fi
   # Use curl's built-in timing which is cross-platform
   RESPONSE=$(curl -s -o /dev/null -w "%{http_code}|%{time_total}" -X POST "$API_ENDPOINT/ingest" \
     -H "Content-Type: application/json" \
-    -d '{"tenant_id":"test_tenant","log_id":"smoke_test_1","text":"Smoke test log with phone 555-123-4567"}')
+    -d '{"tenant_id":"DEMO_TEST_TENANT_LIVE","log_id":"smoke_test_1","text":"Smoke test log with phone 555-123-4567"}')
 
   HTTP_CODE=$(echo "$RESPONSE" | cut -d'|' -f1)
   TIME_TOTAL=$(echo "$RESPONSE" | cut -d'|' -f2)
@@ -61,6 +61,7 @@ sleep 10
   # SQS Queue
   QUEUE_ATTRS=$(aws sqs get-queue-attributes \
     --queue-url "$SQS_QUEUE_URL" \
+    --region us-east-1 \
     --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
     --output json 2>/dev/null)
 
@@ -72,7 +73,7 @@ sleep 10
   echo "  In-flight: $IN_FLIGHT"
 
   # DynamoDB count
-  ITEM_COUNT=$(aws dynamodb describe-table --table-name tenant_processed_logs --output json 2>/dev/null | jq -r '.Table.ItemCount // 0')
+  ITEM_COUNT=$(aws dynamodb describe-table --table-name tenant_processed_logs --region us-east-1 --output json 2>/dev/null | jq -r '.Table.ItemCount // 0')
   echo ""
   echo "DynamoDB:"
   echo "  Total items: $ITEM_COUNT"
