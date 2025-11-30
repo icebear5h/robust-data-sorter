@@ -15,14 +15,6 @@ async function simulateHeavyProcessing(text: string): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, sleepTimeMs));
 }
 
-/**
- * Processes the text to create modified_data
- * Simple transformation: mask phone-like patterns (XXX-XXX-XXXX)
- */
-function processText(text: string): string {
-  // Simple masking of phone number patterns
-  return text.replace(/\b\d{3}-\d{3}-\d{4}\b/g, 'XXX-XXX-XXXX');
-}
 
 /**
  * Processes a single SQS message
@@ -39,8 +31,6 @@ async function processMessage(record: SQSRecord): Promise<void> {
   // Simulate heavy CPU-bound processing
   await simulateHeavyProcessing(message.text);
 
-  // Process the text
-  const modifiedData = processText(message.text);
 
   // Build the DynamoDB record
   const processedLog: ProcessedLog = {
@@ -48,7 +38,7 @@ async function processMessage(record: SQSRecord): Promise<void> {
     log_sk: `LOG#${message.logId}`,
     source: message.source,
     original_text: message.text,
-    modified_data: modifiedData,
+    modified_data: message.text,
     processed_at: new Date().toISOString()
   };
 

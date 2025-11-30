@@ -58,9 +58,9 @@ See [tests/README.md](tests/README.md) for detailed testing documentation, inclu
 - Queue backlog behavior and why test order matters
 - Configuration and monitoring
 
----
+## Design
 
-1. Overview
+### Overview
 
 The system exposes a single HTTP endpoint, POST /ingest, that accepts logs from two different sources:
 
@@ -90,7 +90,7 @@ Architecture Diagram : ![ArchitectureDiagram](ArchitectureDiagram.png)
 
 The ingestion component is a single Lambda function behind API Gateway, handling two input modes.
 
-For the JSON mode, the client sends Content-Type: application/json and a body that contains tenant\_id, log\_id, and text. The handler validates that tenant\_id, log\_id, and text are present and well-formed, then it serializes into the internal txt format. It constructs an internal message with fields:
+For the JSON mode, the handler validates that tenant\_id, log\_id, and text are present and well-formed, then it serializes into the internal txt format. It constructs an internal message with fields:
 
 * tenantId: taken from tenant\_id.
 
@@ -100,7 +100,7 @@ For the JSON mode, the client sends Content-Type: application/json and a body th
 
 * text: the text field from the JSON.
 
-For the raw text mode, the client sends Content-Type: text/plain, sets X-Tenant-ID to the tenant identifier, and places the raw log content in the HTTP body as plain text. There is no log\_id in this case, so the ingestion function generates a log identifier on the server side (for example, using a UUID or ULID). For text uploads, the internal message becomes:
+For the raw text mode, the handler validates that X-Tenant-ID is present and well-formed, then it serializes into the internal txt format. It constructs an internal message with fields:
 
 * tenantId: taken from the X-Tenant-ID header.
 
@@ -112,7 +112,7 @@ For the raw text mode, the client sends Content-Type: text/plain, sets X-Tenant-
 
 In both cases, the result is a unified internal message shape with the same fields, so the downstream worker does not care whether the log came from JSON or a text upload.
 
-After constructing this message, the Ingest Lambda serializes it as JSON and sends it as the body of a message to an SQS queue. It then immediately returns an HTTP 202 Accepted response to the client. The problem statement does not specify a required response body, so the minimal safe choice is a small JSON object such as { "status": "accepted" }. Returning tenant\_id and log\_id in the response would be convenient but is not required by the spec.
+After constructing this message, the Ingest Lambda serializes it as JSON and sends it as the body of a message to an SQS queue. It then immediately returns an HTTP 202 Accepted response to the client. The problem statement does not specify a required response body, so we return { "status": "accepted", tenantId: tenant\_id, logId: log\_id }, 
 
 The key property is that this endpoint is non-blocking. It does not perform heavy processing and does not write to the NoSQL database. All heavy work and all storage operations are delegated to the worker through SQS. This design allows the endpoint to handle the “Flood” scenario of high request volume because each request only does lightweight validation, normalization, and a single SQS send before returning 202\.
 
@@ -120,27 +120,37 @@ The key property is that this endpoint is non-blocking. It does not perform heav
 
 4. Component B – Worker
 
-The worker is implemented as a separate Lambda function that is triggered by messages in the SQS queue. AWS Lambda’s SQS event source mapping delivers batches of messages to the function.
+The worker is implemented as a separate Lambda function that is triggered by messages in the SQS queue. AWS Lambda's SQS event source mapping delivers batches of messages to the function.
+
+**Worker concurrency is intentionally constrained:** The system is configured with `maximum_concurrency = 7` for the worker Lambda (terraform/main.tf:221). With an AWS account limit of 10 concurrent Lambda executions, this leaves ~3 executions for the ingest Lambda.
+
+**This creates intentional queue backlog under load:**
+- Worker throughput: 7 workers ÷ 2.5s avg processing time = **2.8 messages/second**
+- Ingestion capacity: ~**16.7 messages/second** (1000 RPM)
+- **Queue backlog growth: ~14 messages/second during load tests**
+
+This is intentional and demonstrates real-world behavior under resource constraints. If the system runs continuously at 1000 RPM, the SQS queue will grow indefinitely. In production, you would either:
+1. Increase worker concurrency to match ingestion rate
+2. Accept queue backlog during traffic spikes, draining during low-traffic periods
+3. Scale worker concurrency dynamically based on queue depth
+
+For testing, this constraint validates that the system handles queue backlog gracefully and that idempotent writes prevent data corruption during retries.
 
 For each SQS message, the handler parses the JSON body back into the internal message structure, recovering tenantId, logId, source, and text. The text field is the normalized flat text produced by the ingestion step.
 
-To simulate CPU-bound heavy processing as required, the worker computes the length of the text and sleeps for 0.05 seconds per character. For example, if the text has 100 characters, the worker waits for 5 seconds before continuing. This fulfills the “sleep 0.05 seconds per character of text” requirement.
+To simulate CPU-bound heavy processing as required, the worker computes the length of the text and sleeps for 0.05 seconds per character. 
 
-After the simulated heavy work, the worker builds the processed metadata that will be stored in the NoSQL database. The problem’s example document includes the fields source, original\_text, modified\_data, and processed\_at. The worker sets:
+After the simulated heavy work, the worker builds the processed metadata that will be stored in the NoSQL database. The worker sets:
 
 * source: copied from the internal message’s source field ("json" or "text\_upload").
 
 * original\_text: the original text value from the message.
 
-* modified\_data: a processed version of the original text. The exact transformation is not specified in the problem; one simple choice is to apply a deterministic text transformation such as masking phone-like patterns, or the worker can simply copy the original text unchanged. The important part is that this field exists and is derived from the original\_text.
+* modified\_data: a processed version of the original text. The exact transformation is not specified in the problem; so just going to use the original text.
 
 * processed\_at: the timestamp when processing completed, stored as an ISO-8601 string.
 
 The worker then writes this record to DynamoDB, using a key layout that enforces tenant isolation (described in the next section). After a successful write, the worker deletes the SQS message from the queue, acknowledging completion.
-
-If the worker crashes, times out, or throws an error after receiving a message but before deleting it, SQS will eventually make the message visible again, and Lambda will reprocess it. Because a given (tenantId, logId) pair always maps to the same DynamoDB key, repeated processing due to retries simply overwrites the same record. This gives at-least-once processing semantics with idempotent storage. For messages that repeatedly fail, an SQS dead-letter queue can be configured, but that part is an implementation choice and not a strict requirement of the prompt.
-
-The important constraints from the problem are honored: only the worker writes to the NoSQL DB, heavy processing is simulated with 0.05 seconds per character, and processing is decoupled via a managed broker.
 
 ---
 
@@ -169,8 +179,6 @@ A typical item in this table therefore looks like:
 * modified\_data: the processed text
 
 * processed\_at: the time processing completed
-
-This layout mirrors the conceptual path: tenants/{tenant\_id}/processed\_logs/{log\_id}, the partition key corresponds to the tenant part of the path, and the sort key corresponds to the processed\_logs/{log\_id} portion.
 
 Tenant isolation is achieved by always including the partition key in queries. To fetch logs for a particular tenant, the application queries DynamoDB with tenant\_pk \= "TENANT\#acme\_corp". This returns only that tenant’s logs. There is no “flat all\_logs table” where records for different tenants are mixed and distinguished only by a tenant\_id attribute. Instead, tenant identity is embedded into the key structure itself, which is exactly what the “strict isolation via partition keys” requirement is asking for.
 
@@ -227,7 +235,7 @@ The system handles failures at both the ingestion and worker stages to ensure no
    - API Gateway still returns HTTP 500/502 to client
    - Client may retry, potentially creating a duplicate message in SQS
    - Worker processes both messages and overwrites the same DynamoDB record (same tenant_pk and log_sk)
-   - Result: Message is processed successfully, possible duplicate work but idempotent storage prevents data corruption
+   - Result: Message is processed reliably.
 
 **Worker Lambda Failures (Primary Resilience Mechanism):**
 
@@ -246,13 +254,3 @@ The system handles failures at both the ingestion and worker stages to ensure no
    - Messages that repeatedly fail after multiple retries can be routed to a dead-letter queue (DLQ)
    - Prevents problematic messages from blocking the queue indefinitely
    - DLQ messages can be inspected and reprocessed manually after fixing underlying issues
-
-**Why worker resilience is more critical than ingestion:**
-
-- Ingest Lambda is fast (50-100ms): validation + SQS send
-- Worker Lambda is slow (2-5 seconds typical): 0.05s per character + DynamoDB write latency
-- Worker is stateful: writes to persistent storage, requires proper retry and idempotency
-- Ingest is stateless: simply forwards messages to SQS
-
-The architecture naturally provides crash resilience through SQS's visibility timeout mechanism and DynamoDB's idempotent writes, ensuring the system can recover gracefully from failures without manual intervention.
-
